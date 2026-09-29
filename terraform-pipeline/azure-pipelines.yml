@@ -32,7 +32,7 @@ variables:
   backendStorageAccount:  'sttfstatedev001'
   backendContainer:       'tfstate'
   backendKey:             'practice.terraform.tfstate'
-  TF_WORKING_DIR:         '$(System.DefaultWorkingDirectory)/terraform'
+  TF_WORKING_DIR:         '$(System.DefaultWorkingDirectory)/terraform-pipeline/terraform'
   environmentName:        'production-approval'
 
 pool:
@@ -319,7 +319,6 @@ stages:
                 gitleaks detect \
                   --source . \
                   --config $(System.DefaultWorkingDirectory)/terraform-pipeline/.gitleaks.toml \
-                  --log-opts "origin/master...HEAD" \
                   --report-format junit \
                   --report-path $(Agent.TempDirectory)/gitleaks-report.xml \
                   --exit-code 0
@@ -352,7 +351,6 @@ stages:
               script: |
                 trufflehog git \
                   file://. \
-                  --since-commit origin/master \
                   --only-verified \
                   --fail
             continueOnError: true
