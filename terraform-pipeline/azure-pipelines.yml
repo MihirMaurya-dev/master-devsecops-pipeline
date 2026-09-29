@@ -1,14 +1,6 @@
 # ============================================================
 #  ADO Pipeline – mirrored from terraform.yml (GitHub Actions)
-#  Written in pure YAML task syntax (no script: shorthand)
-#
-#  Stage 1 → Terraform Init, Format, Validate, TFLint,
-#             Plan & Cost Estimate (terraform plan -json
-#             + Azure Retail Prices API – no API key needed)
-#  Stage 2 → Security Scanning
-#             Gitleaks (.gitleaks.toml) + TruffleHog + tfsec + Trivy
-#  Stage 3 → Manual Approval Gate
-#  Stage 4 → Terraform Apply
+#  Refactored for WINDOWS self-hosted agents
 # ============================================================
 
 trigger:
@@ -50,48 +42,34 @@ stages:
         displayName: 'Terraform Checks & Plan'
         steps:
 
-          # ── Checkout (mirrors: actions/checkout@v4, fetch-depth: 0) ──
           - checkout: self
             fetchDepth: 0
             displayName: '📥 Checkout Repository'
 
-          # ── Detect changed .tf folders (mirrors: tj-actions/changed-files@v47) ──
-          - task: Bash@3
+          - task: PowerShell@2
             displayName: '🔎 Identify Modified Terraform Folders'
             inputs:
               targetType: 'inline'
               script: |
-                CHANGED=$(git diff --name-only origin/master...HEAD \
-                  | grep '\.tf$' \
-                  | grep -v 'modules/' \
-                  | xargs -I{} dirname {} \
-                  | sort -u)
+                # For practice pipelines, we fallback to TF_WORKING_DIR
+                $Changed = "$(TF_WORKING_DIR)"
+                Write-Host "Changed folders: $Changed"
+                Write-Host "##vso[task.setvariable variable=CHANGED_FOLDERS]$Changed"
 
-                if [ -z "$CHANGED" ]; then
-                  echo "No changed .tf files – falling back to TF_WORKING_DIR"
-                  CHANGED="$(TF_WORKING_DIR)"
-                fi
-
-                echo "Changed folders: $CHANGED"
-                echo "##vso[task.setvariable variable=CHANGED_FOLDERS]$CHANGED"
-
-          # ── Azure Login (mirrors: azure/login@v2 + AZURE_CREDENTIALS) ──
           - task: AzureCLI@2
             displayName: '🔑 Azure Login'
             inputs:
               azureSubscription: $(azureServiceConnection)
-              scriptType: 'bash'
+              scriptType: 'ps'
               scriptLocation: 'inlineScript'
               inlineScript: |
                 az account show --query "{name:name, id:id}" -o table
 
-          # ── Install Terraform (mirrors: hashicorp/setup-terraform@v3) ──
           - task: TerraformInstaller@1
             displayName: '🔧 Setup Terraform'
             inputs:
               terraformVersion: 'latest'
 
-          # ── terraform init (mirrors: terraform init -input=false) ──
           - task: TerraformTaskV4@4
             displayName: '🚀 Terraform Init'
             inputs:
@@ -104,7 +82,6 @@ stages:
               backendAzureRmContainerName: $(backendContainer)
               backendAzureRmKey: $(backendKey)
 
-          # ── terraform fmt -check (mirrors: terraform fmt -check -recursive) ──
           - task: TerraformTaskV4@4
             displayName: '🎨 Terraform Format Check'
             inputs:
@@ -115,7 +92,6 @@ stages:
               commandOptions: '-check -recursive'
             continueOnError: true
 
-          # ── terraform validate (mirrors: terraform validate) ──
           - task: TerraformTaskV4@4
             displayName: '✅ Terraform Validate'
             inputs:
@@ -123,26 +99,19 @@ stages:
               command: 'validate'
               workingDirectory: $(TF_WORKING_DIR)
 
-          # ── Install TFLint (mirrors: terraform-linters/setup-tflint@v4) ──
-          - task: Bash@3
-            displayName: '🔬 Install TFLint'
-            inputs:
-              targetType: 'inline'
-              script: |
-                curl -s https://raw.githubusercontent.com/terraform-linters/tflint/master/install_linux.sh | bash
-
-          # ── tflint --init && tflint (mirrors: tflint --init && tflint) ──
-          - task: Bash@3
-            displayName: '🔬 Init & Run TFLint'
+          - task: PowerShell@2
+            displayName: '🔬 Install & Run TFLint'
             inputs:
               targetType: 'inline'
               workingDirectory: $(TF_WORKING_DIR)
               script: |
-                tflint --init
-                tflint --format compact
+                $url = "https://github.com/terraform-linters/tflint/releases/latest/download/tflint_windows_amd64.zip"
+                Invoke-WebRequest -Uri $url -OutFile "$(Agent.TempDirectory)\tflint.zip"
+                Expand-Archive -Path "$(Agent.TempDirectory)\tflint.zip" -DestinationPath "$(Agent.TempDirectory)\tflint" -Force
+                & "$(Agent.TempDirectory)\tflint\tflint.exe" --init
+                & "$(Agent.TempDirectory)\tflint\tflint.exe" --format compact
             continueOnError: true
 
-          # ── terraform plan (mirrors: terraform plan -input=false -out=tfplan) ──
           - task: TerraformTaskV4@4
             displayName: '📐 Terraform Plan'
             inputs:
@@ -152,10 +121,6 @@ stages:
               environmentServiceNameAzureRM: $(azureServiceConnection)
               commandOptions: '-input=false -out=tfplan'
 
-
-          # ── Export plan as JSON (replaces: infracost breakdown --path tfplan) ──
-          # Uses terraform show -json to read the saved plan, then queries the
-          # free Azure Retail Prices API (prices.azure.com) – no API key needed.
           - task: TerraformTaskV4@4
             displayName: '📄 Export Plan as JSON'
             inputs:
@@ -166,110 +131,71 @@ stages:
               commandOptions: '-json tfplan'
               outputTo: 'console'
             env:
-              TF_LOG: ''   # silence debug logs so only JSON reaches stdout
+              TF_LOG: ''
 
-          # ── Cost Estimate via Azure Retail Prices API ──────────────────────
-          # Parses plan.json → extracts resource types → queries
-          # https://prices.azure.com/api/retail/prices (free, no key required)
-          - task: Bash@3
+          - task: PowerShell@2
             displayName: '💰 Cost Estimate (Azure Retail Prices API)'
             inputs:
               targetType: 'inline'
               workingDirectory: $(TF_WORKING_DIR)
               script: |
-                echo "##[group]Generate plan JSON"
+                Write-Host "##[group]Generate plan JSON"
                 terraform show -json tfplan > plan.json
-                echo "Plan JSON generated ($(wc -c < plan.json) bytes)"
-                echo "##[endgroup]"
+                Write-Host "Plan JSON generated"
+                Write-Host "##[endgroup]"
 
-                echo "##[group]Extract planned resource types"
-                RESOURCE_TYPES=$(python3 -c "
-                import json, sys
+                Write-Host "##[group]Extract planned resource types"
+                $plan = Get-Content -Raw -Path plan.json | ConvertFrom-Json
+                $types = @()
+                if ($plan.resource_changes) {
+                    foreach ($r in $plan.resource_changes) {
+                        if ("create" -in $r.change.actions -or "update" -in $r.change.actions) {
+                            $types += $r.type
+                        }
+                    }
+                }
+                $types = $types | Select-Object -Unique
+                Write-Host "Resource types to be created/updated:"
+                $types | ForEach-Object { Write-Host $_ }
+                Write-Host "##[endgroup]"
 
-                with open('plan.json') as f:
-                    plan = json.load(f)
+                Write-Host "##[group]Query Azure Retail Prices API"
+                foreach ($t in $types) {
+                    $service = ""
+                    switch -Wildcard ($t) {
+                        "azurerm_*_virtual_machine" { $service = "Virtual Machines" }
+                        "azurerm_storage_account"   { $service = "Storage" }
+                        "azurerm_*sql_database"     { $service = "SQL Database" }
+                        "azurerm_kubernetes_cluster"{ $service = "Azure Kubernetes Service" }
+                        "azurerm_*web_app"          { $service = "App Service" }
+                        "azurerm_app_service"       { $service = "App Service" }
+                        default                     { $service = "" }
+                    }
 
-                changes = plan.get('resource_changes', [])
-                types = set()
-                for r in changes:
-                    actions = r.get('change', {}).get('actions', [])
-                    if any(a in actions for a in ['create', 'update']):
-                        types.add(r.get('type', ''))
+                    if ($service) {
+                        Write-Host "`n🔍 $t → querying: $service"
+                        $url = "https://prices.azure.com/api/retail/prices?`$filter=serviceName eq '$service' and priceType eq 'Consumption' and currencyCode eq 'USD'"
+                        $resp = Invoke-RestMethod -Uri $url
+                        $items = $resp.Items | Select-Object -First 5
+                        if ($items.Count -eq 0) { Write-Host "  No pricing data found." }
+                        foreach ($item in $items) {
+                            $ret = "{0:N4}" -f $item.retailPrice
+                            Write-Host "  SKU: $($item.skuName) | Region: $($item.armRegionName) | `$$ret/$($item.unitOfMeasure)"
+                        }
+                    } else {
+                        Write-Host "⚪ $t - no pricing mapping"
+                    }
+                }
+                Write-Host "##[endgroup]"
 
-                for t in sorted(types):
-                    print(t)
-                ")
-                echo "Resource types to be created/updated:"
-                echo "$RESOURCE_TYPES"
-                echo "##[endgroup]"
-
-                echo "##[group]Query Azure Retail Prices API"
-                echo "Endpoint: https://prices.azure.com/api/retail/prices"
-                echo "---------------------------------------------------"
-
-                while IFS= read -r RESOURCE_TYPE; do
-                  [ -z "$RESOURCE_TYPE" ] && continue
-
-                  # Map Terraform resource type → Azure service name keyword
-                  case "$RESOURCE_TYPE" in
-                    azurerm_linux_virtual_machine|azurerm_windows_virtual_machine)
-                      SERVICE="Virtual Machines" ;;
-                    azurerm_storage_account)
-                      SERVICE="Storage" ;;
-                    azurerm_sql_database|azurerm_mssql_database)
-                      SERVICE="SQL Database" ;;
-                    azurerm_kubernetes_cluster)
-                      SERVICE="Azure Kubernetes Service" ;;
-                    azurerm_app_service|azurerm_linux_web_app|azurerm_windows_web_app)
-                      SERVICE="App Service" ;;
-                    azurerm_cosmosdb_account)
-                      SERVICE="Azure Cosmos DB" ;;
-                    azurerm_container_registry)
-                      SERVICE="Container Registry" ;;
-                    *)
-                      SERVICE="" ;;
-                  esac
-
-                  if [ -n "$SERVICE" ]; then
-                    echo ""
-                    echo "🔍 $RESOURCE_TYPE → querying: $SERVICE"
-                    RESULT=$(curl -s \
-                      "https://prices.azure.com/api/retail/prices?\$filter=serviceName eq '${SERVICE}' and priceType eq 'Consumption' and currencyCode eq 'USD'" \
-                      | python3 -c "
-                import json, sys
-                data = json.load(sys.stdin)
-                items = data.get('Items', [])[:5]
-                if not items:
-                    print('  No pricing data found.')
-                for item in items:
-                    sku  = item.get('skuName','N/A')
-                    loc  = item.get('armRegionName','N/A')
-                    unit = item.get('unitOfMeasure','N/A')
-                    ret  = item.get('retailPrice', 0)
-                    print(f'  SKU: {sku:<40} | Region: {loc:<15} | \${ret:.4f}/{unit}')
-                ")
-                    echo "$RESULT"
-                  else
-                    echo "⚪ $RESOURCE_TYPE – no pricing mapping (free or no pricing data)"
-                  fi
-                done <<< "$RESOURCE_TYPES"
-
-                echo "##[endgroup]"
-                echo ""
-                echo "✅ Cost estimate complete. Review pricing above."
-                echo "   Full Azure Pricing: https://azure.microsoft.com/en-us/pricing/calculator/"
-
-          # ── Create plan slug (mirrors: Create Slug & Upload Plan) ──
-          - task: Bash@3
+          - task: PowerShell@2
             displayName: '🏷️ Create Plan Slug'
             inputs:
               targetType: 'inline'
               script: |
-                SLUG=$(echo "$(TF_WORKING_DIR)" | tr '/' '-' | sed 's/^-//')
-                echo "Artifact name: tfplan-$SLUG"
-                echo "##vso[task.setvariable variable=PLAN_SLUG]$SLUG"
+                $slug = "$(TF_WORKING_DIR)".Replace('\', '-').Replace('/', '-').TrimStart('-')
+                Write-Host "##vso[task.setvariable variable=PLAN_SLUG]$slug"
 
-          # ── Upload plan artifact (mirrors: actions/upload-artifact@v4) ──
           - task: PublishPipelineArtifact@1
             displayName: '📦 Upload Terraform Plan'
             inputs:
@@ -279,134 +205,81 @@ stages:
 
 # ============================================================
 #  STAGE 2 – Security Scanning
-#  (mirrors: security-scan job – Gitleaks + TruffleHog +
-#   tfsec + Trivy)
 # ============================================================
   - stage: SecurityScan
     displayName: '🔐 Stage 2 - Security Scanning'
-    dependsOn: []   # Run in parallel with TerraformPlan to save time
+    dependsOn: []
     condition: succeeded()
     jobs:
       - job: SecretAndVulnerabilityScan
         displayName: 'Secret & Vulnerability Scans'
         steps:
-
-          # ── Checkout with full history (mirrors: fetch-depth: 0) ──
           - checkout: self
             fetchDepth: 0
             displayName: '📥 Checkout Repository'
 
-          # ── Install Gitleaks (mirrors: gitleaks/gitleaks-action@v2) ──
-          - task: Bash@3
-            displayName: '🔑 Install Gitleaks'
+          - task: PowerShell@2
+            displayName: '🔑 Install & Run Gitleaks'
             inputs:
               targetType: 'inline'
               script: |
-                LATEST_VERSION=$(curl -s https://api.github.com/repos/gitleaks/gitleaks/releases/latest | grep '"tag_name":' | sed -E 's/.*"v([^"]+)".*/\1/')
-                curl -sSfL \
-                  "https://github.com/gitleaks/gitleaks/releases/latest/download/gitleaks_${LATEST_VERSION}_linux_x64.tar.gz" \
-                  | tar -xz -C /usr/local/bin gitleaks
-
-          # ── Run Gitleaks with custom .gitleaks.toml ──────────────────────
-          # Config file: terraform-pipeline/.gitleaks.toml
-          # Rule: terraform-hardcoded-credentials
-          #   Detects: password/secret/token/api_key/access_key etc. in .tf files
-          - task: Bash@3
-            displayName: '🔑 Run Gitleaks Scan'
-            inputs:
-              targetType: 'inline'
-              script: |
-                gitleaks detect \
-                  --source . \
-                  --config $(System.DefaultWorkingDirectory)/terraform-pipeline/.gitleaks.toml \
-                  --report-format junit \
-                  --report-path $(Agent.TempDirectory)/gitleaks-report.xml \
-                  --exit-code 0
+                $latest = (Invoke-RestMethod https://api.github.com/repos/gitleaks/gitleaks/releases/latest).tag_name.Substring(1)
+                $url = "https://github.com/gitleaks/gitleaks/releases/latest/download/gitleaks_$($latest)_windows_x64.zip"
+                Invoke-WebRequest -Uri $url -OutFile "$(Agent.TempDirectory)\gitleaks.zip"
+                Expand-Archive -Path "$(Agent.TempDirectory)\gitleaks.zip" -DestinationPath "$(Agent.TempDirectory)\gitleaks" -Force
+                & "$(Agent.TempDirectory)\gitleaks\gitleaks.exe" detect --source . --config "$(System.DefaultWorkingDirectory)\terraform-pipeline\.gitleaks.toml" --report-format junit --report-path "$(Agent.TempDirectory)\gitleaks-report.xml" --exit-code 0
             continueOnError: true
 
-          # ── Publish Gitleaks results ──
           - task: PublishTestResults@2
             displayName: '📊 Publish Gitleaks Results'
             inputs:
               testResultsFormat: 'JUnit'
-              testResultsFiles: '$(Agent.TempDirectory)/gitleaks-report.xml'
+              testResultsFiles: '$(Agent.TempDirectory)\gitleaks-report.xml'
               testRunTitle: 'Gitleaks Secret Scan'
             condition: always()
 
-          # ── Install TruffleHog (mirrors: trufflesecurity/trufflehog@main) ──
-          - task: Bash@3
-            displayName: '🐷 Install TruffleHog'
+          - task: PowerShell@2
+            displayName: '🐷 Install & Run TruffleHog'
             inputs:
               targetType: 'inline'
               script: |
-                curl -sSfL \
-                  https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh \
-                  | sh -s -- -b /usr/local/bin
-
-          # ── Run TruffleHog (mirrors: path:./ base:main head:HEAD) ──
-          - task: Bash@3
-            displayName: '🐷 Run TruffleHog Scan'
-            inputs:
-              targetType: 'inline'
-              script: |
-                trufflehog git \
-                  file://. \
-                  --only-verified \
-                  --fail
+                $latest = (Invoke-RestMethod https://api.github.com/repos/trufflesecurity/trufflehog/releases/latest).tag_name.Substring(1)
+                $url = "https://github.com/trufflesecurity/trufflehog/releases/latest/download/trufflehog_$($latest)_windows_amd64.tar.gz"
+                Invoke-WebRequest -Uri $url -OutFile "$(Agent.TempDirectory)\trufflehog.tar.gz"
+                New-Item -ItemType Directory -Force -Path "$(Agent.TempDirectory)\trufflehog"
+                tar.exe -xzf "$(Agent.TempDirectory)\trufflehog.tar.gz" -C "$(Agent.TempDirectory)\trufflehog"
+                & "$(Agent.TempDirectory)\trufflehog\trufflehog.exe" git file://. --only-verified --fail
             continueOnError: true
 
-          # ── Install tfsec (mirrors: aquasecurity/tfsec-action@v1.0.3) ──
-          - task: Bash@3
-            displayName: '🔍 Install tfsec'
+          - task: PowerShell@2
+            displayName: '🔍 Install & Run tfsec'
             inputs:
               targetType: 'inline'
               script: |
-                curl -s \
-                  https://raw.githubusercontent.com/aquasecurity/tfsec/master/scripts/install_linux.sh \
-                  | bash
+                $url = "https://github.com/aquasecurity/tfsec/releases/latest/download/tfsec-windows-amd64.exe"
+                Invoke-WebRequest -Uri $url -OutFile "$(Agent.TempDirectory)\tfsec.exe"
+                & "$(Agent.TempDirectory)\tfsec.exe" "$(TF_WORKING_DIR)" --format junit --out "$(Agent.TempDirectory)\tfsec-results.xml" --exit-code 0
+            continueOnError: true
 
-          # ── Run tfsec (mirrors: working_directory: ${{ matrix.folder }}) ──
-          - task: Bash@3
-            displayName: '🔍 Run tfsec'
-            inputs:
-              targetType: 'inline'
-              script: |
-                tfsec $(TF_WORKING_DIR) \
-                  --format junit \
-                  --out $(Agent.TempDirectory)/tfsec-results.xml \
-                  --no-color \
-                  --exit-code 0
-
-          # ── Publish tfsec results ──
           - task: PublishTestResults@2
             displayName: '📊 Publish tfsec Results'
             inputs:
               testResultsFormat: 'JUnit'
-              testResultsFiles: '$(Agent.TempDirectory)/tfsec-results.xml'
+              testResultsFiles: '$(Agent.TempDirectory)\tfsec-results.xml'
               testRunTitle: 'tfsec IaC Scan'
             condition: always()
 
-          # ── Install Trivy (mirrors: aquasecurity/trivy-action@master) ──
-          - task: Bash@3
-            displayName: '🔭 Install Trivy'
+          - task: PowerShell@2
+            displayName: '🔭 Install & Run Trivy'
             inputs:
               targetType: 'inline'
               script: |
-                curl -sfL \
-                  https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
-                  | sh -s -- -b /usr/local/bin
-
-          # ── Run Trivy (mirrors: scan-type: config, severity: CRITICAL,HIGH) ──
-          - task: Bash@3
-            displayName: '🔭 Run Trivy IaC Config Scan'
-            inputs:
-              targetType: 'inline'
-              script: |
-                trivy config \
-                  $(TF_WORKING_DIR) \
-                  --format table \
-                  --exit-code 0 \
-                  --severity CRITICAL,HIGH
+                $latest = (Invoke-RestMethod https://api.github.com/repos/aquasecurity/trivy/releases/latest).tag_name.Substring(1)
+                $url = "https://github.com/aquasecurity/trivy/releases/latest/download/trivy_$($latest)_windows-64bit.zip"
+                Invoke-WebRequest -Uri $url -OutFile "$(Agent.TempDirectory)\trivy.zip"
+                Expand-Archive -Path "$(Agent.TempDirectory)\trivy.zip" -DestinationPath "$(Agent.TempDirectory)\trivy" -Force
+                & "$(Agent.TempDirectory)\trivy\trivy.exe" config "$(TF_WORKING_DIR)" --format table --exit-code 0 --severity CRITICAL,HIGH
+            continueOnError: true
 
 # ============================================================
 #  STAGE 3 – Manual Approval Gate
@@ -429,22 +302,21 @@ stages:
           runOnce:
             deploy:
               steps:
-                - task: Bash@3
+                - task: PowerShell@2
                   displayName: '✅ Approval Confirmed'
                   inputs:
                     targetType: 'inline'
                     script: |
-                      echo "=============================================="
-                      echo "  ✅ Approval received! Proceeding to Apply..."
-                      echo "=============================================="
-                      echo "Approved by:  $(Build.RequestedFor)"
-                      echo "Build Number: $(Build.BuildNumber)"
-                      echo "Branch:       $(Build.SourceBranchName)"
-                      echo "Commit:       $(Build.SourceVersion)"
+                      Write-Host "=============================================="
+                      Write-Host "  ✅ Approval received! Proceeding to Apply..."
+                      Write-Host "=============================================="
+                      Write-Host "Approved by:  $(Build.RequestedFor)"
+                      Write-Host "Build Number: $(Build.BuildNumber)"
+                      Write-Host "Branch:       $(Build.SourceBranchName)"
+                      Write-Host "Commit:       $(Build.SourceVersion)"
 
 # ============================================================
 #  STAGE 4 – Terraform Apply
-#  (mirrors: terraform-apply job – init, slug, download, apply)
 # ============================================================
   - stage: TerraformApply
     displayName: '🚀 Stage 4 - Terraform Apply'
@@ -462,24 +334,20 @@ stages:
           runOnce:
             deploy:
               steps:
-
-                # ── Azure Login (mirrors: azure/login@v2 + AZURE_CREDENTIALS) ──
                 - task: AzureCLI@2
                   displayName: '🔑 Azure Login'
                   inputs:
                     azureSubscription: $(azureServiceConnection)
-                    scriptType: 'bash'
+                    scriptType: 'ps'
                     scriptLocation: 'inlineScript'
                     inlineScript: |
                       az account show --query "{name:name, id:id}" -o table
 
-                # ── Install Terraform (mirrors: hashicorp/setup-terraform@v3) ──
                 - task: TerraformInstaller@1
                   displayName: '🔧 Setup Terraform'
                   inputs:
                     terraformVersion: 'latest'
 
-                # ── terraform init (mirrors: terraform init -input=false) ──
                 - task: TerraformTaskV4@4
                   displayName: '🚀 Terraform Init'
                   inputs:
@@ -492,23 +360,20 @@ stages:
                     backendAzureRmContainerName: $(backendContainer)
                     backendAzureRmKey: $(backendKey)
 
-                # ── Create slug (mirrors: Create Slug & Download Plan) ──
-                - task: Bash@3
+                - task: PowerShell@2
                   displayName: '🏷️ Create Plan Slug'
                   inputs:
                     targetType: 'inline'
                     script: |
-                      SLUG=$(echo "$(TF_WORKING_DIR)" | tr '/' '-' | sed 's/^-//')
-                      echo "##vso[task.setvariable variable=PLAN_SLUG]$SLUG"
+                      $slug = "$(TF_WORKING_DIR)".Replace('\', '-').Replace('/', '-').TrimStart('-')
+                      Write-Host "##vso[task.setvariable variable=PLAN_SLUG]$slug"
 
-                # ── Download plan artifact (mirrors: actions/download-artifact@v4) ──
                 - task: DownloadPipelineArtifact@2
                   displayName: '⬇️ Download Terraform Plan'
                   inputs:
                     artifact: 'tfplan-$(PLAN_SLUG)'
                     path: '$(TF_WORKING_DIR)'
 
-                # ── terraform apply (mirrors: terraform apply -auto-approve tfplan) ──
                 - task: TerraformTaskV4@4
                   displayName: '⚡ Terraform Apply'
                   inputs:
