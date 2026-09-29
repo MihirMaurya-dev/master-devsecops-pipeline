@@ -211,13 +211,12 @@ stages:
     dependsOn: []
     condition: succeeded()
     jobs:
-      - job: SecretAndVulnerabilityScan
-        displayName: 'Secret & Vulnerability Scans'
+      - job: GitleaksScan
+        displayName: 'Gitleaks Scan'
         steps:
           - checkout: self
             fetchDepth: 0
             displayName: '📥 Checkout Repository'
-
           - task: PowerShell@2
             displayName: '🔑 Install & Run Gitleaks'
             inputs:
@@ -229,7 +228,6 @@ stages:
                 Expand-Archive -Path "$(Agent.TempDirectory)\gitleaks.zip" -DestinationPath "$(Agent.TempDirectory)\gitleaks" -Force
                 & "$(Agent.TempDirectory)\gitleaks\gitleaks.exe" detect --source . --config "$(System.DefaultWorkingDirectory)\terraform-pipeline\.gitleaks.toml" --report-format junit --report-path "$(Agent.TempDirectory)\gitleaks-report.xml" --exit-code 0
             continueOnError: true
-
           - task: PublishTestResults@2
             displayName: '📊 Publish Gitleaks Results'
             inputs:
@@ -238,6 +236,12 @@ stages:
               testRunTitle: 'Gitleaks Secret Scan'
             condition: always()
 
+      - job: TruffleHogScan
+        displayName: 'TruffleHog Scan'
+        steps:
+          - checkout: self
+            fetchDepth: 0
+            displayName: '📥 Checkout Repository'
           - task: PowerShell@2
             displayName: '🐷 Install & Run TruffleHog'
             inputs:
@@ -251,6 +255,11 @@ stages:
                 & "$(Agent.TempDirectory)\trufflehog\trufflehog.exe" git file://. --only-verified --fail
             continueOnError: true
 
+      - job: TFSecScan
+        displayName: 'tfsec Scan'
+        steps:
+          - checkout: self
+            displayName: '📥 Checkout Repository'
           - task: PowerShell@2
             displayName: '🔍 Install & Run tfsec'
             inputs:
@@ -260,7 +269,6 @@ stages:
                 Invoke-WebRequest -Uri $url -OutFile "$(Agent.TempDirectory)\tfsec.exe"
                 & "$(Agent.TempDirectory)\tfsec.exe" "$(TF_WORKING_DIR)" --format junit --out "$(Agent.TempDirectory)\tfsec-results.xml" --exit-code 0
             continueOnError: true
-
           - task: PublishTestResults@2
             displayName: '📊 Publish tfsec Results'
             inputs:
@@ -269,6 +277,11 @@ stages:
               testRunTitle: 'tfsec IaC Scan'
             condition: always()
 
+      - job: TrivyScan
+        displayName: 'Trivy Scan'
+        steps:
+          - checkout: self
+            displayName: '📥 Checkout Repository'
           - task: PowerShell@2
             displayName: '🔭 Install & Run Trivy'
             inputs:
