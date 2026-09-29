@@ -36,7 +36,7 @@ variables:
   environmentName:        'production-approval'
 
 pool:
-  vmImage: 'ubuntu-latest'
+  name: 'Velociraptor-agent'
 
 # ============================================================
 #  STAGE 1 – Terraform Init, Format, Validate & Plan
