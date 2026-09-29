@@ -36,7 +36,7 @@ variables:
   environmentName:        'production-approval'
 
 pool:
-  name: 'Velociraptor-agent'
+  name: 'Velociraptor-Agent'
 
 # ============================================================
 #  STAGE 1 – Terraform Init, Format, Validate & Plan
