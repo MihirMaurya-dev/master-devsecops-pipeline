@@ -14,7 +14,7 @@
 trigger:
   branches:
     include:
-      - main
+      - master
       - feature
   paths:
     include:
@@ -23,7 +23,7 @@ trigger:
 pr:
   branches:
     include:
-      - main
+      - master
 
 # ── Pipeline-level variables ─────────────────────────────────
 variables:
@@ -61,7 +61,7 @@ stages:
             inputs:
               targetType: 'inline'
               script: |
-                CHANGED=$(git diff --name-only origin/main...HEAD \
+                CHANGED=$(git diff --name-only origin/master...HEAD \
                   | grep '\.tf$' \
                   | grep -v 'modules/' \
                   | xargs -I{} dirname {} \
@@ -318,7 +318,7 @@ stages:
                 gitleaks detect \
                   --source . \
                   --config $(System.DefaultWorkingDirectory)/terraform-pipeline/.gitleaks.toml \
-                  --log-opts "origin/main...HEAD" \
+                  --log-opts "origin/master...HEAD" \
                   --report-format junit \
                   --report-path $(Agent.TempDirectory)/gitleaks-report.xml \
                   --exit-code 0
@@ -351,7 +351,7 @@ stages:
               script: |
                 trufflehog git \
                   file://. \
-                  --since-commit origin/main \
+                  --since-commit origin/master \
                   --only-verified \
                   --fail
             continueOnError: true
@@ -420,7 +420,7 @@ stages:
     condition: |
       and(
         succeeded(),
-        eq(variables['Build.SourceBranch'], 'refs/heads/main')
+        eq(variables['Build.SourceBranch'], 'refs/heads/master')
       )
     jobs:
       - deployment: WaitForApproval
@@ -453,7 +453,7 @@ stages:
     condition: |
       and(
         succeeded(),
-        eq(variables['Build.SourceBranch'], 'refs/heads/main')
+        eq(variables['Build.SourceBranch'], 'refs/heads/master')
       )
     jobs:
       - deployment: TerraformApplyJob
