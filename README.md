@@ -14,6 +14,20 @@
 
 ---
 
+## 🧰 Technology Stack & Tooling
+
+<div align="center">
+
+<a href="https://skillicons.dev">
+  <img src="https://skillicons.dev/icons?i=azure,terraform,githubactions,git,linux,bash,powershell,vscode&theme=dark&perline=8" alt="Technology Stack" />
+</a>
+
+</div>
+
+<br/>
+
+---
+
 ## 🚀 Architectural Overview
 
 This repository contains a **production-hardened DevSecOps CI/CD pipeline** designed for Azure DevOps and GitHub Actions. It enforces strict supply chain integrity, automated FinOps cost forecasting, multi-engine security scanning, and human-in-the-loop governance before applying any Terraform code.
